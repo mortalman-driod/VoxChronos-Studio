@@ -1,0 +1,6 @@
+{
+  "name": "VoxChronos — Real-Time Accent Cloning & Voice Modulation Studio",
+  "description": "Low-latency acoustic voice synthesis studio and web API featuring real-time accent cloning, male and female vocal personas, pitch-locked speech tempo control, and emotional prosody modulation.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
