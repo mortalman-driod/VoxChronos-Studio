@@ -93,12 +93,25 @@ function base64ToUint8(base64: string): Uint8Array {
 }
 
 // Lightweight IndexedDB helper for offline mobile devotional & Bible chapter caching
-const IDB_NAME = 'voxchronos_mobile_audio_v1';
+const LEGACY_IDB_NAMES = [
+  'voxchronos_mobile_audio_v1',
+  'voxchronos_mobile_audio_v2',
+];
+const IDB_NAME = 'voxchronos_mobile_audio_v3';
 const IDB_STORE = 'wav_segments';
+let legacyPurged = false;
 
 function openAudioIdb(): Promise<IDBDatabase | null> {
   if (typeof window === 'undefined' || !('indexedDB' in window)) {
     return Promise.resolve(null);
+  }
+  if (!legacyPurged) {
+    legacyPurged = true;
+    for (const oldName of LEGACY_IDB_NAMES) {
+      try {
+        window.indexedDB.deleteDatabase(oldName);
+      } catch {}
+    }
   }
   return new Promise((resolve) => {
     try {
@@ -183,6 +196,7 @@ export const DocumentStreamReader: React.FC<DocumentStreamReaderProps> = ({
 
   // Lookahead Queue & Audio Buffer Cache State
   const [activeChunkIndex, setActiveChunkIndex] = useState<number>(0);
+  const activeChunkIndexRef = useRef<number>(0);
   const [isStreamPlaying, setIsStreamPlaying] = useState<boolean>(false);
   const [chunkStatusMap, setChunkStatusMap] = useState<
     Record<number, 'queued' | 'prefetching' | 'ready' | 'playing'>
@@ -453,16 +467,24 @@ export const DocumentStreamReader: React.FC<DocumentStreamReaderProps> = ({
     return requestPromise;
   };
 
-  // Pre-warm the first 2 segments whenever document or voice changes so playback is instant
+  // Pre-warm up to the first 8 segments sequentially whenever document or voice changes so Chunk 0 is ready first without saturating mobile connections
   useEffect(() => {
+    let cancelled = false;
     setActiveChunkIndex(0);
+    activeChunkIndexRef.current = 0;
     setChunkStatusMap({});
-    if (chunks.length > 0) {
-      synthesizeOrGetCachedChunk(0);
-      if (chunks.length > 1) {
-        synthesizeOrGetCachedChunk(1);
+
+    (async () => {
+      const limit = Math.min(8, chunks.length);
+      for (let i = 0; i < limit; i++) {
+        if (cancelled) break;
+        await synthesizeOrGetCachedChunk(i);
       }
-    }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, [
     rawDocText,
     normalizerOpts,
@@ -481,6 +503,7 @@ export const DocumentStreamReader: React.FC<DocumentStreamReaderProps> = ({
     }
 
     setActiveChunkIndex(index);
+    activeChunkIndexRef.current = index;
     setIsStreamPlaying(true);
     isPlayingRef.current = true;
     updateMobileWakeLock(true);
@@ -493,7 +516,13 @@ export const DocumentStreamReader: React.FC<DocumentStreamReaderProps> = ({
       }
     }
 
-    // Trigger 3-chunk lookahead prefetch (index + 1, index + 2, index + 3) in parallel
+    // Prioritize resolving the active segment FIRST before launching lookahead prefetches
+    let blobUrl = await synthesizeOrGetCachedChunk(index);
+    if (!blobUrl && isPlayingRef.current) {
+      blobUrl = await synthesizeOrGetCachedChunk(index);
+    }
+
+    // Trigger 3-chunk lookahead prefetch (index + 1, index + 2, index + 3) in background
     const lookaheadIndices = getPrefetchWindowIndices(index, chunks.length, 3);
     for (const nextIdx of lookaheadIndices) {
       if (nextIdx !== index) {
@@ -501,7 +530,6 @@ export const DocumentStreamReader: React.FC<DocumentStreamReaderProps> = ({
       }
     }
 
-    const blobUrl = await synthesizeOrGetCachedChunk(index);
     if (!isPlayingRef.current) return;
 
     setChunkStatusMap((prev) => {
@@ -680,8 +708,9 @@ export const DocumentStreamReader: React.FC<DocumentStreamReaderProps> = ({
   const speakerShortName = activePersona.name.split(' — ')[0];
 
   const handleDeckEnded = () => {
-    if (isPlayingRef.current && activeChunkIndex + 1 < chunks.length) {
-      handlePlayChunkAt(activeChunkIndex + 1);
+    const nextIdx = activeChunkIndexRef.current + 1;
+    if (isPlayingRef.current && nextIdx < chunks.length) {
+      handlePlayChunkAt(nextIdx);
     } else {
       setIsStreamPlaying(false);
       isPlayingRef.current = false;

@@ -967,6 +967,7 @@ export class VoxChronosMobileReader {
   private activePlayer: 'A' | 'B' = 'A';
   private blobUrlWindow = new Map<number, string>();
   private inFlightControllers = new Map<number, AbortController>();
+  private inFlightPromises = new Map<number, Promise<string>>();
   private wakeLock: any = null;
   private chunks: string[] = [];
   private activeIdx = 0;
@@ -974,6 +975,12 @@ export class VoxChronosMobileReader {
   private maxRamChunks = 20;
 
   constructor(private apiBase = '${baseUrl}') {
+    if (typeof window !== 'undefined' && 'indexedDB' in window) {
+      try {
+        window.indexedDB.deleteDatabase('voxchronos_mobile_audio_v1');
+        window.indexedDB.deleteDatabase('voxchronos_mobile_audio_v2');
+      } catch {}
+    }
     [this.audioA, this.audioB].forEach((el) => {
       el.preload = 'auto';
       el.addEventListener('ended', () => this.playChunk(this.activeIdx + 1));
@@ -1091,34 +1098,43 @@ export class VoxChronosMobileReader {
     });
   }
 
-  private async fetchChunkAudio(idx: number): Promise<string> {
-    if (this.blobUrlWindow.has(idx)) return this.blobUrlWindow.get(idx)!;
+  private fetchChunkAudio(idx: number): Promise<string> {
+    if (this.blobUrlWindow.has(idx)) return Promise.resolve(this.blobUrlWindow.get(idx)!);
+    if (this.inFlightPromises.has(idx)) return this.inFlightPromises.get(idx)!;
+
     const ctrl = new AbortController();
     this.inFlightControllers.set(idx, ctrl);
-    try {
-      const res = await fetch(\`\${this.apiBase}/api/v1/voice/synthesize\`, {
-        method: 'POST',
-        signal: ctrl.signal,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          engineMode: '${compiled.engineMode}',
-          voiceId: '${config.voiceId}',
-          accentId: '${config.accentId}',
-          tempoMultiplier: this.tempo,
-          emotion: ${JSON.stringify(config.emotion)},
-          text: this.chunks[idx],
-          skipNormalization: true
-        })
-      });
-      const { audioBase64 } = await res.json();
-      const blob = VoxChronosMobileReader.ensureWavBlob(audioBase64, 24000);
-      const objUrl = URL.createObjectURL(blob);
-      this.blobUrlWindow.set(idx, objUrl);
-      this.pruneSlidingBlobWindow(this.activeIdx);
-      return objUrl;
-    } finally {
-      this.inFlightControllers.delete(idx);
-    }
+
+    const task = (async () => {
+      try {
+        const res = await fetch(\`\${this.apiBase}/api/v1/voice/synthesize\`, {
+          method: 'POST',
+          signal: ctrl.signal,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            engineMode: '${compiled.engineMode}',
+            voiceId: '${config.voiceId}',
+            accentId: '${config.accentId}',
+            tempoMultiplier: this.tempo,
+            emotion: ${JSON.stringify(config.emotion)},
+            text: this.chunks[idx],
+            skipNormalization: true
+          })
+        });
+        const { audioBase64 } = await res.json();
+        const blob = VoxChronosMobileReader.ensureWavBlob(audioBase64, 24000);
+        const objUrl = URL.createObjectURL(blob);
+        this.blobUrlWindow.set(idx, objUrl);
+        this.pruneSlidingBlobWindow(this.activeIdx);
+        return objUrl;
+      } finally {
+        this.inFlightControllers.delete(idx);
+        this.inFlightPromises.delete(idx);
+      }
+    })();
+
+    this.inFlightPromises.set(idx, task);
+    return task;
   }
 
   async playChunk(idx: number) {
@@ -1133,17 +1149,25 @@ export class VoxChronosMobileReader {
       if (pendingIdx < idx || pendingIdx > idx + 3) {
         ctrl.abort();
         this.inFlightControllers.delete(pendingIdx);
+        this.inFlightPromises.delete(pendingIdx);
       }
     }
 
-    // Lookahead prefetch N+1, N+2, N+3
+    // Resolve active chunk FIRST (with 1x automatic retry if an earlier prefetch was aborted)
+    let url = '';
+    try {
+      url = await this.fetchChunkAudio(idx);
+    } catch {
+      url = await this.fetchChunkAudio(idx);
+    }
+
+    // Trigger 3-chunk lookahead prefetch (idx + 1, idx + 2, idx + 3) in background
     for (let offset = 1; offset <= 3; offset++) {
       if (idx + offset < this.chunks.length) {
         this.fetchChunkAudio(idx + offset).catch(() => {});
       }
     }
 
-    const url = await this.fetchChunkAudio(idx);
     const currentEl = this.activePlayer === 'A' ? this.audioA : this.audioB;
     const standbyEl = this.activePlayer === 'A' ? this.audioB : this.audioA;
     standbyEl.pause();

@@ -38,7 +38,7 @@ type WorkspaceSection = 'studio' | 'reader' | 'cloner' | 'library' | 'api';
 const SCRIPT_TEMPLATES: { label: string; text: string }[] = [
   {
     label: 'Psalm 71:1 — Spurgeon Devotional',
-    text: "I will praise thee, O Lord. Praise should always follow answered prayer, as the mist of earth's gratitude rises when the sun of heaven's love warms the ground.",
+    text: "I will praise thee, O Lord. Praise should always follow answered prayer, as the mist of earth's gratitude rises when the sun of heaven's love warms the ground. Hath the Lord been gracious to thee, and inclined his ear to the voice of thy supplications? Then praise him as long as thou livest. Let the ripe fruit drop upon the fertile soil from which it drew its life. Deny not a song to him who hath answered thy prayer and given thee the desire of thy heart. To be silent over God's mercies is to incur the guilt of ingratitude; it is to act as basely as the nine lepers, who after they were healed, returned not to give glory to God.",
   },
   {
     label: 'Global Product Keynote',
@@ -294,7 +294,10 @@ export default function App() {
             base64ToUint8(data.audioBase64),
             24000
           );
-          const wavUrl = `data:audio/wav;base64,${uint8ToBase64(validWavBytes)}`;
+          const wavBlob = new Blob([validWavBytes.buffer as ArrayBuffer], {
+            type: 'audio/wav',
+          });
+          const wavUrl = URL.createObjectURL(wavBlob);
           setTakes((prev) =>
             prev.map((t) =>
               t.id === takeId
@@ -314,8 +317,12 @@ export default function App() {
       }
     }
 
-    hydrateRealSeedAudio('take-seed-male', initialMaleConfig);
-    hydrateRealSeedAudio('take-seed-female', initialFemaleConfig);
+    (async () => {
+      await hydrateRealSeedAudio('take-seed-male', initialMaleConfig);
+      if (!cancelled) {
+        await hydrateRealSeedAudio('take-seed-female', initialFemaleConfig);
+      }
+    })();
 
     return () => {
       cancelled = true;
@@ -359,27 +366,22 @@ export default function App() {
     });
   };
 
-  const ensureAudioGraph = () => {
+  const unlockMobileAudioElement = () => {
     const audioEl = audioRef.current;
-    if (!audioEl) return;
-    if (!audioCtxRef.current) {
-      try {
-        const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-        const ctx = new AudioCtx();
-        const analyser = ctx.createAnalyser();
-        analyser.fftSize = 512;
-        const source = ctx.createMediaElementSource(audioEl);
-        source.connect(analyser);
-        analyser.connect(ctx.destination);
-        audioCtxRef.current = ctx;
-        analyserRef.current = analyser;
-        sourceNodeRef.current = source;
-      } catch {
-        // Fallback if Web Audio API graph is already bound or restricted
+    if (!audioEl || (audioEl as any).__mobileUnlocked) return;
+    try {
+      const silentWav =
+        'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
+      audioEl.src = silentWav;
+      const p = audioEl.play();
+      if (p) {
+        p.then(() => {
+          audioEl.pause();
+          audioEl.currentTime = 0;
+          (audioEl as any).__mobileUnlocked = true;
+        }).catch(() => {});
       }
-    } else if (audioCtxRef.current.state === 'suspended') {
-      audioCtxRef.current.resume().catch(() => {});
-    }
+    } catch {}
   };
 
   const playDataUrl = async (
@@ -392,13 +394,13 @@ export default function App() {
     const audioEl = audioRef.current;
     if (audioEl && dataUrl) {
       try {
-        ensureAudioGraph();
         audioEl.pause();
         audioEl.src = dataUrl;
         audioEl.playbackRate = rate;
         if ('preservesPitch' in audioEl) {
           (audioEl as any).preservesPitch = pitchLockEnabled;
         }
+        (audioEl as any).__mobileUnlocked = true;
         await audioEl.play();
         setIsPlaying(true);
         return;
@@ -420,6 +422,9 @@ export default function App() {
     }
     setScriptError(null);
     setIsSynthesizing(true);
+
+    // Synchronously unlock mobile audio element inside the user tap gesture before awaiting fetch
+    unlockMobileAudioElement();
 
     try {
       const response = await fetch('/api/v1/voice/synthesize', {
@@ -447,7 +452,10 @@ export default function App() {
         base64ToUint8(data.audioBase64),
         24000
       );
-      const audioDataUrl = `data:audio/wav;base64,${uint8ToBase64(validWavBytes)}`;
+      const wavBlob = new Blob([validWavBytes.buffer as ArrayBuffer], {
+        type: 'audio/wav',
+      });
+      const audioDataUrl = URL.createObjectURL(wavBlob);
       const newTake: SynthesisTake = {
         id: `take-${Date.now()}`,
         createdAt: new Date().toLocaleTimeString([], {
@@ -507,6 +515,9 @@ export default function App() {
       return;
     }
 
+    // Unlock mobile audio synchronously before awaiting on-demand synthesis
+    unlockMobileAudioElement();
+
     // If seed take hasn't finished background hydration yet, synthesize it live now
     setIsSynthesizing(true);
     try {
@@ -531,7 +542,10 @@ export default function App() {
           base64ToUint8(data.audioBase64),
           24000
         );
-        const wavUrl = `data:audio/wav;base64,${uint8ToBase64(validWavBytes)}`;
+        const wavBlob = new Blob([validWavBytes.buffer as ArrayBuffer], {
+          type: 'audio/wav',
+        });
+        const wavUrl = URL.createObjectURL(wavBlob);
         setTakes((prev) =>
           prev.map((t) =>
             t.id === take.id
