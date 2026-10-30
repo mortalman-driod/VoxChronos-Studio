@@ -85,6 +85,11 @@ export interface CompiledSynthesisPayload {
   emotionSummary: string;
 }
 
+export type PublicCompiledSynthesisPayload = Omit<
+  CompiledSynthesisPayload,
+  'internalVoiceCode'
+>;
+
 export interface SynthesisTake {
   id: string;
   createdAt: string;
@@ -399,39 +404,79 @@ export function calculateTempoMetrics(scriptText: string, tempoMultiplier: numbe
   };
 }
 
+/**
+ * Complete 66-book Old & New Testament abbreviation + full book name dictionary,
+ * supporting both Arabic (1, 2, 3) and Roman numeral (I, II, III) prefixes.
+ */
 const BIBLE_BOOK_EXPANSIONS: Record<string, string> = {
-  'Gen\\.?': 'Genesis',
-  'Exod?\\.?': 'Exodus',
-  'Lev\\.?': 'Leviticus',
-  'Num\\.?': 'Numbers',
-  'Deut\\.?': 'Deuteronomy',
-  'Josh\\.?': 'Joshua',
-  'Ps\\.?': 'Psalm',
-  'Psa\\.?': 'Psalm',
-  'Prov\\.?': 'Proverbs',
-  'Eccl\\.?': 'Ecclesiastes',
-  'Isa\\.?': 'Isaiah',
-  'Jer\\.?': 'Jeremiah',
-  'Matt?\\.?': 'Matthew',
-  'Rom\\.?': 'Romans',
-  '1\\s*Cor\\.?': 'First Corinthians',
-  '2\\s*Cor\\.?': 'Second Corinthians',
-  'Gal\\.?': 'Galatians',
-  'Eph\\.?': 'Ephesians',
-  'Phil\\.?': 'Philippians',
-  'Col\\.?': 'Colossians',
-  '1\\s*Thess\\.?': 'First Thessalonians',
-  '2\\s*Thess\\.?': 'Second Thessalonians',
-  '1\\s*Tim\\.?': 'First Timothy',
-  '2\\s*Tim\\.?': 'Second Timothy',
-  'Heb\\.?': 'Hebrews',
-  'Jas\\.?': 'James',
-  '1\\s*Pet\\.?': 'First Peter',
-  '2\\s*Pet\\.?': 'Second Peter',
-  '1\\s*John': 'First John',
-  '2\\s*John': 'Second John',
-  '3\\s*John': 'Third John',
-  'Rev\\.?': 'Revelation',
+  // Old Testament (39 Books)
+  'Gen(?:esis)?\\.?': 'Genesis',
+  'Exod(?:us)?\\.?|Ex\\.?': 'Exodus',
+  'Lev(?:iticus)?\\.?': 'Leviticus',
+  'Num(?:bers)?\\.?': 'Numbers',
+  'Deut(?:eronomy)?\\.?': 'Deuteronomy',
+  'Josh(?:ua)?\\.?': 'Joshua',
+  'Judg(?:es)?\\.?': 'Judges',
+  'Ruth\\.?': 'Ruth',
+  '(?:1|I)\\s*Sam(?:uel)?\\.?': 'First Samuel',
+  '(?:2|II)\\s*Sam(?:uel)?\\.?': 'Second Samuel',
+  '(?:1|I)\\s*(?:Kgs|Kings)\\.?': 'First Kings',
+  '(?:2|II)\\s*(?:Kgs|Kings)\\.?': 'Second Kings',
+  '(?:1|I)\\s*(?:Chr|Chron(?:icles)?)\\.?': 'First Chronicles',
+  '(?:2|II)\\s*(?:Chr|Chron(?:icles)?)\\.?': 'Second Chronicles',
+  'Ezra\\.?': 'Ezra',
+  'Neh(?:emiah)?\\.?': 'Nehemiah',
+  'Esth(?:er)?\\.?': 'Esther',
+  'Job\\.?': 'Job',
+  'Ps(?:a|alm|alms)?\\.?': 'Psalm',
+  'Prov(?:erbs)?\\.?': 'Proverbs',
+  'Eccl(?:esiastes)?\\.?': 'Ecclesiastes',
+  'Song(?:\\s+of\\s+Solomon)?\\.?|Cant\\.?': 'Song of Solomon',
+  'Isa(?:iah)?\\.?': 'Isaiah',
+  'Jer(?:emiah)?\\.?': 'Jeremiah',
+  'Lam(?:entations)?\\.?': 'Lamentations',
+  'Ezek(?:iel)?\\.?': 'Ezekiel',
+  'Dan(?:iel)?\\.?': 'Daniel',
+  'Hos(?:ea)?\\.?': 'Hosea',
+  'Joel\\.?': 'Joel',
+  'Amos\\.?': 'Amos',
+  'Obad(?:iah)?\\.?': 'Obadiah',
+  'Jonah\\.?': 'Jonah',
+  'Mic(?:ah)?\\.?': 'Micah',
+  'Nah(?:um)?\\.?': 'Nahum',
+  'Hab(?:akkuk)?\\.?': 'Habakkuk',
+  'Zeph(?:aniah)?\\.?': 'Zephaniah',
+  'Hag(?:gai)?\\.?': 'Haggai',
+  'Zech(?:ariah)?\\.?': 'Zechariah',
+  'Mal(?:achi)?\\.?': 'Malachi',
+  // New Testament (27 Books)
+  'Matt(?:hew)?\\.?|Mt\\.?': 'Matthew',
+  'Mark\\.?|Mk\\.?': 'Mark',
+  'Luke\\.?|Lk\\.?': 'Luke',
+  'John\\.?|Jn\\.?': 'John',
+  'Acts\\.?': 'Acts',
+  'Rom(?:ans)?\\.?': 'Romans',
+  '(?:1|I)\\s*Cor(?:inthians)?\\.?': 'First Corinthians',
+  '(?:2|II)\\s*Cor(?:inthians)?\\.?': 'Second Corinthians',
+  'Gal(?:atians)?\\.?': 'Galatians',
+  'Eph(?:esians)?\\.?': 'Ephesians',
+  'Phil(?:ippians)?\\.?': 'Philippians',
+  'Col(?:ossians)?\\.?': 'Colossians',
+  '(?:1|I)\\s*Thess(?:alonians)?\\.?': 'First Thessalonians',
+  '(?:2|II)\\s*Thess(?:alonians)?\\.?': 'Second Thessalonians',
+  '(?:1|I)\\s*Tim(?:othy)?\\.?': 'First Timothy',
+  '(?:2|II)\\s*Tim(?:othy)?\\.?': 'Second Timothy',
+  'Titus\\.?': 'Titus',
+  'Phlm\\.?|Philem(?:on)?\\.?': 'Philemon',
+  'Heb(?:rews)?\\.?': 'Hebrews',
+  'Jas\\.?|James\\.?': 'James',
+  '(?:1|I)\\s*Pet(?:er)?\\.?': 'First Peter',
+  '(?:2|II)\\s*Pet(?:er)?\\.?': 'Second Peter',
+  '(?:1|I)\\s*John\\.?': 'First John',
+  '(?:2|II)\\s*John\\.?': 'Second John',
+  '(?:3|III)\\s*John\\.?': 'Third John',
+  'Jude\\.?': 'Jude',
+  'Rev(?:elation)?\\.?': 'Revelation',
 };
 
 export function normalizeDocumentText(
@@ -446,6 +491,7 @@ export function normalizeDocumentText(
 ): string {
   let text = rawText || '';
 
+  // 1. Replace typographic ligatures from PDFs
   text = text
     .replace(/\uFB01/g, 'fi')
     .replace(/\uFB02/g, 'fl')
@@ -453,15 +499,18 @@ export function normalizeDocumentText(
     .replace(/\uFB03/g, 'ffi')
     .replace(/\uFB04/g, 'ffl');
 
+  // 2. Repair PDF column/line-wrap hyphens and running page headers/footers
   if (options.repairPdfHyphens) {
     text = text.replace(/([a-zA-Z])-\s*\r?\n\s*([a-z])/g, '$1$2');
     text = text.replace(/\bPage\s+\d+\s+of\s+\d+\b/gi, '');
+    text = text.replace(/^\s*-\s*\d+\s*-\s*$/gm, '');
   }
 
+  // 3. Expand all 66 Bible books + Roman numerals + en-dash/em-dash/hyphen verse ranges
   if (options.expandBibleCitations) {
     for (const [pattern, fullBook] of Object.entries(BIBLE_BOOK_EXPANSIONS)) {
       const regex = new RegExp(
-        `\\b${pattern}\\s+(\\d+):(\\d+)(?:-(\\d+))?\\b`,
+        `\\b(?:${pattern})\\s+(\\d+):(\\d+)(?:[-–—](\\d+))?\\b`,
         'g'
       );
       text = text.replace(regex, (_match, ch, v1, v2) => {
@@ -471,22 +520,33 @@ export function normalizeDocumentText(
         return `${fullBook} chapter ${ch}, verse ${v1}`;
       });
     }
-    text = text.replace(
-      /\b(Genesis|Exodus|Psalms?|Proverbs|Isaiah|Matthew|Mark|Luke|John|Acts|Romans|Philippians|Revelation)\s+(\d+):(\d+)\b/g,
-      '$1 chapter $2, verse $3'
-    );
+    // Expand standalone v. / vv. references (e.g., "vv. 4-7" -> "verses 4 through 7", "v. 3" -> "verse 3")
+    text = text.replace(/\bvv\.\s*(\d+)[-–—](\d+)\b/gi, 'verses $1 through $2');
+    text = text.replace(/\bv\.\s*(\d+)\b/gi, 'verse $1');
   }
 
+  // 4. Strip inline Scripture verse numbers ([71:1], [1], (1), and bare leading verse numbers before capital letters)
   if (options.stripVerseNumbers) {
     text = text.replace(/\[\d+:\d+\]/g, ' ');
     text = text.replace(/(?:^|\s)\d+:\d+(?=\s+[A-Z])/g, ' ');
+    // Strip bracketed single verse numbers at start of line or after sentence punctuation: e.g. "[2] And the earth..."
+    text = text.replace(/(?:^|(?<=[.!?;:\n]))\s*\[\d{1,3}\](?=\s+[A-Z"'\u201C\u2018])/gm, ' ');
+    // Strip bare leading verse numbers at start of line/paragraph: e.g. "2 And the earth was without form"
+    text = text.replace(/(?:^|\n)\s*\d{1,3}\s+(?=[A-Z"'\u201C\u2018])/g, '\n');
   }
 
+  // 5. Normalize all-caps liturgical LORD / GOD in KJV/ESV scripture so the vocal engine never spells out L-O-R-D
+  text = text.replace(/\bLORD\b/g, 'Lord');
+  text = text.replace(/\bGOD\b/g, 'God');
+
+  // 6. Strip academic footnote/citation brackets [14] or [22, 25]
   if (options.stripAcademicBrackets) {
     text = text.replace(/\[\d+(?:\s*,\s*\d+)*\]/g, '');
   }
 
+  // 7. Insert natural breath pause at paragraph breaks or after liturgical "Selah."
   if (options.insertBreathAtParagraphs) {
+    text = text.replace(/\bSelah\./g, 'Selah. <breath>');
     text = text.replace(/\r?\n\s*\r?\n+/g, ' <breath> ');
   } else {
     text = text.replace(/\r?\n\s*\r?\n+/g, '\n\n');
@@ -554,7 +614,25 @@ export function chunkLongDocumentForStreaming(
     } else {
       const clauses = sentence.split(/(?<=,)\s+/g);
       for (const clause of clauses) {
-        if (!currentBuffer) {
+        if (clause.length > maxCharsPerChunk) {
+          // Hard word-boundary split for extraordinarily long unpunctuated clauses
+          if (currentBuffer) {
+            flushBuffer(currentBuffer);
+            currentBuffer = '';
+          }
+          const words = clause.split(/\s+/);
+          let wordBuf = '';
+          for (const w of words) {
+            if (!wordBuf) wordBuf = w;
+            else if ((wordBuf + ' ' + w).length <= maxCharsPerChunk) {
+              wordBuf = `${wordBuf} ${w}`;
+            } else {
+              flushBuffer(wordBuf);
+              wordBuf = w;
+            }
+          }
+          currentBuffer = wordBuf;
+        } else if (!currentBuffer) {
           currentBuffer = clause;
         } else if ((currentBuffer + ' ' + clause).length <= maxCharsPerChunk) {
           currentBuffer = `${currentBuffer} ${clause}`;
@@ -580,7 +658,7 @@ export function chunkLongDocumentForStreaming(
 export function getPrefetchWindowIndices(
   activeChunkIndex: number,
   totalChunks: number,
-  lookaheadCount = 2
+  lookaheadCount = 3
 ): number[] {
   const indices: number[] = [];
   if (totalChunks <= 0 || activeChunkIndex < 0) return indices;
@@ -660,6 +738,13 @@ export function compileSynthesisPayload(
   };
 }
 
+export function sanitizePublicCompiledPayload(
+  compiled: CompiledSynthesisPayload
+): PublicCompiledSynthesisPayload {
+  const { internalVoiceCode: _omitted, ...publicCompiled } = compiled;
+  return publicCompiled;
+}
+
 export function createWavFromPcm16(pcmSamples: Int16Array, sampleRate = 24000): Uint8Array {
   const numChannels = 1;
   const bitsPerSample = 16;
@@ -728,6 +813,65 @@ export function ensureValidWavBytes(rawBytes: Uint8Array, sampleRate = 24000): U
 }
 
 /**
+ * Stitches multiple 24kHz 16-bit mono WAV buffers into a single seamless RIFF WAVE file
+ * with an 8ms cosine fade-in/fade-out at segment boundaries and a natural inter-clause
+ * breath pause (default 160ms) so full devotionals and Bible chapters never truncate or click.
+ */
+export function stitchMultipleWavBuffers(
+  wavBuffers: Uint8Array[],
+  interChunkPauseMs = 160,
+  sampleRate = 24000
+): Uint8Array {
+  if (wavBuffers.length === 0) {
+    return createWavFromPcm16(new Int16Array(0), sampleRate);
+  }
+  if (wavBuffers.length === 1) {
+    return ensureValidWavBytes(wavBuffers[0], sampleRate);
+  }
+
+  const pauseSamples = Math.max(0, Math.floor((interChunkPauseMs / 1000) * sampleRate));
+  const fadeSamples = Math.min(192, Math.floor(0.008 * sampleRate)); // 8ms smooth zero-crossing taper
+
+  const pcmSegments: Int16Array[] = wavBuffers.map((raw) => {
+    const validWav = ensureValidWavBytes(raw, sampleRate);
+    const payloadByteLen = Math.max(0, validWav.byteLength - 44);
+    const evenByteLen = payloadByteLen - (payloadByteLen % 2);
+    const count = evenByteLen / 2;
+    const samples = new Int16Array(count);
+    const view = new DataView(validWav.buffer, validWav.byteOffset + 44, evenByteLen);
+    for (let i = 0; i < count; i++) {
+      samples[i] = view.getInt16(i * 2, true);
+    }
+    // Apply gentle 8ms fade-in and fade-out to eliminate inter-segment boundary clicks
+    const actualFade = Math.min(fadeSamples, Math.floor(count / 4));
+    for (let i = 0; i < actualFade; i++) {
+      const gain = 0.5 * (1 - Math.cos((Math.PI * i) / actualFade));
+      samples[i] = Math.round(samples[i] * gain);
+      samples[count - 1 - i] = Math.round(samples[count - 1 - i] * gain);
+    }
+    return samples;
+  });
+
+  const totalSamples =
+    pcmSegments.reduce((sum, seg) => sum + seg.length, 0) +
+    pauseSamples * Math.max(0, pcmSegments.length - 1);
+
+  const combinedPcm = new Int16Array(totalSamples);
+  let writeOffset = 0;
+  for (let idx = 0; idx < pcmSegments.length; idx++) {
+    const seg = pcmSegments[idx];
+    combinedPcm.set(seg, writeOffset);
+    writeOffset += seg.length;
+    if (idx < pcmSegments.length - 1 && pauseSamples > 0) {
+      // Inter-segment breath silence is already zero-initialized in combinedPcm
+      writeOffset += pauseSamples;
+    }
+  }
+
+  return createWavFromPcm16(combinedPcm, sampleRate);
+}
+
+/**
  * Fallback native OS speech synthesizer when a mobile device is completely offline.
  * Speaks real intelligible words using the mobile browser's speech engine instead of a tone.
  */
@@ -763,7 +907,7 @@ export function speakWithNativeSpeechFallback(
             v.lang.toLowerCase().includes((accent.localeCode || '').toLowerCase()) &&
             (genderHint === 'male'
               ? /male|daniel|david|james|arthur|george|oliver|guy|alex/i.test(v.name)
-              : /female|kate|serena|samantha|victoria|hazel|zira|google uk english female/i.test(
+              : /female|kate|serena|samantha|victoria|hazel|zira|uk english female/i.test(
                   v.name
                 ))
         ) ||
@@ -784,77 +928,6 @@ export function speakWithNativeSpeechFallback(
     if (onEnd) setTimeout(onEnd, 1200);
     return false;
   }
-}
-
-export function synthesizeFormantPreviewWav(
-  config: SynthesisConfig,
-  customAccents: AccentProfile[] = []
-): { wavBytes: Uint8Array; durationSec: number; sampleRate: number } {
-  const sampleRate = 24000;
-  const persona =
-    VOICE_PERSONAS.find((v) => v.id === config.voiceId) || VOICE_PERSONAS[0];
-  const allAccents = [...BUILTIN_ACCENT_PROFILES, ...customAccents];
-  const accent =
-    allAccents.find((a) => a.id === config.accentId) || BUILTIN_ACCENT_PROFILES[0];
-  const tempo = calculateTempoMetrics(config.scriptText, config.tempoMultiplier);
-
-  const rawDuration = Math.min(4.5, Math.max(1.4, tempo.estimatedDurationSec || 2.2));
-  const totalSamples = Math.floor(rawDuration * sampleRate);
-  const pcm = new Int16Array(totalSamples);
-
-  const baseF0 = (persona.fundamentalFreqHz[0] + persona.fundamentalFreqHz[1]) / 2;
-  const expressivenessFactor = (config.emotion.expressiveness / 100) * 0.18 + 0.04;
-  const warmthFactor = config.emotion.warmth / 100;
-  const intensityGain = 0.45 + (config.emotion.intensity / 100) * 0.4;
-  const syllableRateHz = Math.max(2.2, Math.min(7.5, 3.8 * tempo.clampedMultiplier));
-
-  const f1Base = (persona.gender === 'female' ? 510 : 410) + accent.formantOffsetHz[0];
-  const f2Base = (persona.gender === 'female' ? 1780 : 1340) + accent.formantOffsetHz[1];
-
-  let phase0 = 0;
-  let phaseF1 = 0;
-  let phaseF2 = 0;
-
-  for (let i = 0; i < totalSamples; i++) {
-    const t = i / sampleRate;
-    const progress = i / totalSamples;
-
-    const syllablePhase = t * syllableRateHz * 2 * Math.PI;
-    const syllableEnv = Math.pow(0.5 + 0.5 * Math.sin(syllablePhase), 1.4);
-
-    const edgeEnv =
-      t < 0.05
-        ? t / 0.05
-        : totalSamples - i < sampleRate * 0.06
-        ? (totalSamples - i) / (sampleRate * 0.06)
-        : 1.0;
-
-    const phraseContour = 1.0 - 0.12 * progress + 0.08 * Math.sin(t * 2.5);
-    const vibrato = 1.0 + expressivenessFactor * 0.12 * Math.sin(2 * Math.PI * 5.2 * t);
-    const instF0 = baseF0 * phraseContour * vibrato;
-
-    const f1Inst = f1Base + 90 * Math.sin(syllablePhase * 0.5);
-    const f2Inst = f2Base + 180 * Math.cos(syllablePhase * 0.5);
-
-    phase0 += (2 * Math.PI * instF0) / sampleRate;
-    phaseF1 += (2 * Math.PI * f1Inst) / sampleRate;
-    phaseF2 += (2 * Math.PI * f2Inst) / sampleRate;
-
-    const fundamental = Math.sin(phase0) + 0.55 * warmthFactor * Math.sin(2 * phase0);
-    const formant1 = 0.45 * Math.sin(phaseF1) * (0.6 + 0.4 * Math.cos(phase0));
-    const formant2 =
-      0.22 * (1.1 - warmthFactor * 0.4) * Math.sin(phaseF2) * (0.5 + 0.5 * Math.sin(phase0));
-
-    const signal = (fundamental * 0.55 + formant1 + formant2) * syllableEnv * edgeEnv * intensityGain;
-    const clamped = Math.max(-0.95, Math.min(0.95, signal));
-    pcm[i] = Math.round(clamped * 32767);
-  }
-
-  return {
-    wavBytes: createWavFromPcm16(pcm, sampleRate),
-    durationSec: Math.round(rawDuration * 10) / 10,
-    sampleRate,
-  };
 }
 
 export function generateIntegrationSnippets(
@@ -885,23 +958,61 @@ export function generateIntegrationSnippets(
 
   const jsonFormatted = JSON.stringify(requestBody, null, 2);
 
-  const mobileDropInSdk = `// Drop-In Mobile Web App Reader (Zero-Lag Lookahead + Automatic Raw PCM-to-WAV RIFF Wrapping)
-// NOTE: Never use a synthetic sine-wave fallback! This class guarantees real spoken voice audio
-// both via your /api/v1/voice/synthesize backend route AND in standalone mobile web apps.
+  const mobileDropInSdk = `// Drop-In Mobile Web App Reader (10/10 Long-Form Bible, Devotional & PDF Engine)
+// Includes: Dual-Audio Ping-Pong, Sliding-Window Blob Memory Manager (No OOM),
+// Screen WakeLock API, AbortController Priority Queue, and RIFF WAVE Wrapping.
 export class VoxChronosMobileReader {
-  private audio = new Audio();
-  private cache = new Map<number, string>();
+  private audioA = new Audio();
+  private audioB = new Audio();
+  private activePlayer: 'A' | 'B' = 'A';
+  private blobUrlWindow = new Map<number, string>();
+  private inFlightControllers = new Map<number, AbortController>();
+  private wakeLock: any = null;
   private chunks: string[] = [];
   private activeIdx = 0;
   private tempo = ${compiled.tempoMultiplier};
+  private maxRamChunks = 20;
 
   constructor(private apiBase = '${baseUrl}') {
-    this.audio.preload = 'auto';
-    this.audio.addEventListener('ended', () => this.playChunk(this.activeIdx + 1));
+    [this.audioA, this.audioB].forEach((el) => {
+      el.preload = 'auto';
+      el.addEventListener('ended', () => this.playChunk(this.activeIdx + 1));
+    });
   }
 
-  // Ensures raw 24kHz 16-bit PCM (audio/L16) has a valid 44-byte RIFF WAVE header for mobile <audio>
-  private static ensureWavDataUrl(base64Audio: string, sampleRate = 24000): string {
+  // Ensures raw 24kHz 16-bit PCM (audio/L16) has a valid 44-byte RIFF WAVE header & returns a Blob
+  public static ensureWavBlob(base64Audio: string, sampleRate = 24000): Blob {
+    const bin = atob(base64Audio);
+    if (bin.slice(0, 4) === 'RIFF' && bin.slice(8, 12) === 'WAVE') {
+      const out = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+      return new Blob([out], { type: 'audio/wav' });
+    }
+    const dataLen = bin.length - (bin.length % 2);
+    const wav = new Uint8Array(44 + dataLen);
+    const view = new DataView(wav.buffer);
+    const writeStr = (off: number, s: string) => {
+      for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i));
+    };
+    writeStr(0, 'RIFF');
+    view.setUint32(4, 36 + dataLen, true);
+    writeStr(8, 'WAVE');
+    writeStr(12, 'fmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * 2, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
+    writeStr(36, 'data');
+    view.setUint32(40, dataLen, true);
+    for (let i = 0; i < dataLen; i++) wav[44 + i] = bin.charCodeAt(i);
+    return new Blob([wav], { type: 'audio/wav' });
+  }
+
+  // Legacy data-URL helper for single-element integrations
+  public static ensureWavDataUrl(base64Audio: string, sampleRate = 24000): string {
     const bin = atob(base64Audio);
     if (bin.slice(0, 4) === 'RIFF' && bin.slice(8, 12) === 'WAVE') {
       return \`data:audio/wav;base64,\${base64Audio}\`;
@@ -933,10 +1044,32 @@ export class VoxChronosMobileReader {
     return \`data:audio/wav;base64,\${btoa(out)}\`;
   }
 
+  private async acquireWakeLock() {
+    if (typeof navigator !== 'undefined' && 'wakeLock' in navigator && !this.wakeLock) {
+      try {
+        this.wakeLock = await (navigator as any).wakeLock.request('screen');
+      } catch {}
+    }
+  }
+
+  private pruneSlidingBlobWindow(centerIdx: number) {
+    if (this.blobUrlWindow.size <= this.maxRamChunks) return;
+    for (const [idx, objUrl] of this.blobUrlWindow.entries()) {
+      if (idx < centerIdx - 2 || idx > centerIdx + 8) {
+        URL.revokeObjectURL(objUrl);
+        this.blobUrlWindow.delete(idx);
+      }
+    }
+  }
+
   // Call synchronously inside your Mobile "Listen & Pray Aloud" / "Read Aloud" tap handler
   async loadAndPlayDocument(rawDocumentText: string) {
-    this.audio.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
-    await this.audio.play().catch(() => {});
+    const silentUnlock = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
+    this.audioA.src = silentUnlock;
+    this.audioB.src = silentUnlock;
+    await Promise.allSettled([this.audioA.play(), this.audioB.play()]);
+    this.audioB.pause();
+    await this.acquireWakeLock();
 
     const res = await fetch(\`\${this.apiBase}/api/v1/voice/chunk-document\`, {
       method: 'POST',
@@ -945,51 +1078,85 @@ export class VoxChronosMobileReader {
     });
     const { chunks } = await res.json();
     this.chunks = chunks.map((c: any) => c.normalizedText);
-    this.cache.clear();
+    this.blobUrlWindow.forEach((url) => URL.revokeObjectURL(url));
+    this.blobUrlWindow.clear();
     await this.playChunk(0);
   }
 
   setTempoRealTime(newTempo: number) {
     this.tempo = Math.max(0.5, Math.min(2.0, newTempo));
-    this.audio.preservesPitch = true;
-    this.audio.playbackRate = this.tempo;
+    [this.audioA, this.audioB].forEach((el) => {
+      el.preservesPitch = true;
+      el.playbackRate = this.tempo;
+    });
   }
 
   private async fetchChunkAudio(idx: number): Promise<string> {
-    if (this.cache.has(idx)) return this.cache.get(idx)!;
-    const res = await fetch(\`\${this.apiBase}/api/v1/voice/synthesize\`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        engineMode: '${compiled.engineMode}',
-        voiceId: '${config.voiceId}',
-        accentId: '${config.accentId}',
-        tempoMultiplier: this.tempo,
-        emotion: ${JSON.stringify(config.emotion)},
-        text: this.chunks[idx]
-      })
-    });
-    const { audioBase64 } = await res.json();
-    const url = VoxChronosMobileReader.ensureWavDataUrl(audioBase64, 24000);
-    this.cache.set(idx, url);
-    return url;
+    if (this.blobUrlWindow.has(idx)) return this.blobUrlWindow.get(idx)!;
+    const ctrl = new AbortController();
+    this.inFlightControllers.set(idx, ctrl);
+    try {
+      const res = await fetch(\`\${this.apiBase}/api/v1/voice/synthesize\`, {
+        method: 'POST',
+        signal: ctrl.signal,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          engineMode: '${compiled.engineMode}',
+          voiceId: '${config.voiceId}',
+          accentId: '${config.accentId}',
+          tempoMultiplier: this.tempo,
+          emotion: ${JSON.stringify(config.emotion)},
+          text: this.chunks[idx],
+          skipNormalization: true
+        })
+      });
+      const { audioBase64 } = await res.json();
+      const blob = VoxChronosMobileReader.ensureWavBlob(audioBase64, 24000);
+      const objUrl = URL.createObjectURL(blob);
+      this.blobUrlWindow.set(idx, objUrl);
+      this.pruneSlidingBlobWindow(this.activeIdx);
+      return objUrl;
+    } finally {
+      this.inFlightControllers.delete(idx);
+    }
   }
 
   async playChunk(idx: number) {
-    if (idx < 0 || idx >= this.chunks.length) return;
+    if (idx < 0 || idx >= this.chunks.length) {
+      if (this.wakeLock) { this.wakeLock.release().catch(() => {}); this.wakeLock = null; }
+      return;
+    }
     this.activeIdx = idx;
-    if (idx + 1 < this.chunks.length) this.fetchChunkAudio(idx + 1);
-    if (idx + 2 < this.chunks.length) this.fetchChunkAudio(idx + 2);
+
+    // Abort stale prefetches outside our [idx, idx + 3] lookahead window
+    for (const [pendingIdx, ctrl] of this.inFlightControllers.entries()) {
+      if (pendingIdx < idx || pendingIdx > idx + 3) {
+        ctrl.abort();
+        this.inFlightControllers.delete(pendingIdx);
+      }
+    }
+
+    // Lookahead prefetch N+1, N+2, N+3
+    for (let offset = 1; offset <= 3; offset++) {
+      if (idx + offset < this.chunks.length) {
+        this.fetchChunkAudio(idx + offset).catch(() => {});
+      }
+    }
 
     const url = await this.fetchChunkAudio(idx);
-    this.audio.src = url;
-    this.audio.preservesPitch = true;
-    this.audio.playbackRate = this.tempo;
-    await this.audio.play();
+    const currentEl = this.activePlayer === 'A' ? this.audioA : this.audioB;
+    const standbyEl = this.activePlayer === 'A' ? this.audioB : this.audioA;
+    standbyEl.pause();
+
+    currentEl.src = url;
+    currentEl.preservesPitch = true;
+    currentEl.playbackRate = this.tempo;
+    await currentEl.play();
+    this.activePlayer = this.activePlayer === 'A' ? 'B' : 'A';
   }
 }`;
 
-  const restTypescript = `// Low-Latency Unary WAV Synthesis + Real-Time Tempo Control
+  const restTypescript = `// Low-Latency Unary WAV Synthesis (Automatically Stitches Multi-Chunk Chapters)
 const response = await fetch('${baseUrl}/api/v1/voice/synthesize', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
@@ -997,7 +1164,8 @@ const response = await fetch('${baseUrl}/api/v1/voice/synthesize', {
 });
 
 const { audioBase64, mimeType, tempoMultiplier, latencyMs } = await response.json();
-const audio = new Audio(\`data:\${mimeType};base64,\${audioBase64}\`);
+const wavBlob = VoxChronosMobileReader.ensureWavBlob(audioBase64, 24000);
+const audio = new Audio(URL.createObjectURL(wavBlob));
 audio.preservesPitch = ${compiled.pitchLockEnabled}; // Keep formants locked while adjusting tempo
 audio.playbackRate = tempoMultiplier; // Real-time adjustable (0.50x – 2.00x)
 await audio.play();`;
@@ -1044,7 +1212,7 @@ resp = requests.post("${baseUrl}/api/v1/voice/synthesize", json=payload)
 data = resp.json()
 with open("cloned_voice_output.wav", "wb") as f:
     f.write(base64.b64decode(data["audioBase64"]))
-print(f"Synthesized {data['voiceCode']} ({data['gender']}) in {data['latencyMs']}ms")`;
+print(f"Synthesized {data['compiled']['voiceCode']} ({data['compiled']['gender']}) in {data['latencyMs']}ms")`;
 
   return {
     mobileDropInSdk,
