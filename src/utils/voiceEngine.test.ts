@@ -6,6 +6,7 @@ import {
   calculateTempoMetrics,
   compileSynthesisPayload,
   createWavFromPcm16,
+  ensureValidWavBytes,
   synthesizeFormantPreviewWav,
   generateIntegrationSnippets,
   normalizeDocumentText,
@@ -120,7 +121,7 @@ test('compileSynthesisPayload embeds gender, accent directive, emotional modulat
   assert.equal(compiled.styleDirective.includes('warm'), true);
 });
 
-test('createWavFromPcm16 and synthesizeFormantPreviewWav generate valid RIFF WAVE headers', () => {
+test('createWavFromPcm16 and ensureValidWavBytes guarantee valid RIFF WAVE headers for raw L16 PCM and existing WAVs', () => {
   const pcm = new Int16Array([0, 1200, -1200, 3200]);
   const wav = createWavFromPcm16(pcm, 24000);
   assert.equal(wav.byteLength, 44 + pcm.length * 2);
@@ -129,14 +130,26 @@ test('createWavFromPcm16 and synthesizeFormantPreviewWav generate valid RIFF WAV
   assert.equal(headerStr, 'RIFF');
   assert.equal(waveStr, 'WAVE');
 
+  // Raw PCM without RIFF header gets wrapped in 44-byte RIFF WAVE header
+  const rawPcmBytes = new Uint8Array([0x00, 0x05, 0x10, 0xff, 0x20, 0x01, 0x00, 0x00]);
+  const wrapped = ensureValidWavBytes(rawPcmBytes, 24000);
+  assert.equal(wrapped.byteLength, 44 + rawPcmBytes.byteLength);
+  assert.equal(String.fromCharCode(wrapped[0], wrapped[1], wrapped[2], wrapped[3]), 'RIFF');
+  assert.equal(String.fromCharCode(wrapped[8], wrapped[9], wrapped[10], wrapped[11]), 'WAVE');
+
+  // Existing RIFF WAVE is preserved without double-wrapping
+  const passthrough = ensureValidWavBytes(wrapped, 24000);
+  assert.equal(passthrough.byteLength, wrapped.byteLength);
+
   const preview = synthesizeFormantPreviewWav(sampleConfig);
   assert.equal(preview.sampleRate, 24000);
   assert.equal(preview.wavBytes.byteLength > 30000, true);
 });
 
-test('generateIntegrationSnippets produces Mobile Drop-In Reader SDK, REST, Streaming WebAudio, cURL, and Python code', () => {
+test('generateIntegrationSnippets produces Mobile Drop-In Reader SDK with ensureWavDataUrl, REST, Streaming WebAudio, cURL, and Python code', () => {
   const snippets = generateIntegrationSnippets(sampleConfig, [], 'https://voxchronos.dev');
   assert.equal(snippets.mobileDropInSdk.includes('VoxChronosMobileReader'), true);
+  assert.equal(snippets.mobileDropInSdk.includes('ensureWavDataUrl'), true);
   assert.equal(snippets.restTypescript.includes('/api/v1/voice/synthesize'), true);
   assert.equal(snippets.streamingWebAudio.includes('/api/v1/voice/stream'), true);
   assert.equal(snippets.curlCommand.includes('clara-female-soprano'), true);

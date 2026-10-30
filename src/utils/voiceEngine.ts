@@ -159,7 +159,7 @@ export const VOICE_PERSONAS: VoicePersona[] = [
     fundamentalFreqHz: [98, 138],
     formantSignature: 'F1 410Hz · F2 1320Hz',
     timbreSummary: 'Deep chest authority, controlled transient attack, zero sibilance harshness',
-    recommendedRole: 'Bible & Liturgical Reading, Keynote Briefings & Long-Form Essays',
+    recommendedRole: 'Bible & Devotional Reading, Keynote Briefings & Long-Form Essays',
     baseWarmth: 78,
     baseCrispness: 85,
   },
@@ -323,7 +323,7 @@ export const EMOTION_PRESETS: Record<
   },
   sacred_liturgical: {
     label: 'Reverent Scripture & Liturgical',
-    description: 'Poised, unhurried cadence with deep chest resonance for Bibles, poetry, and solemn prose.',
+    description: 'Poised, unhurried cadence with deep chest resonance for Bibles, devotionals, and solemn prose.',
     defaultValues: { intensity: 58, warmth: 90, expressiveness: 64, crispness: 86 },
     styleKeywords: 'reverent, poised, resonant liturgical narrator with deliberate clause pacing and dignified gravitas',
   },
@@ -472,7 +472,7 @@ export function normalizeDocumentText(
       });
     }
     text = text.replace(
-      /\b(Genesis|Exodus|Psalms?|Proverbs|Isaiah|Matthew|Mark|Luke|John|Acts|Romans|Revelation)\s+(\d+):(\d+)\b/g,
+      /\b(Genesis|Exodus|Psalms?|Proverbs|Isaiah|Matthew|Mark|Luke|John|Acts|Romans|Philippians|Revelation)\s+(\d+):(\d+)\b/g,
       '$1 chapter $2, verse $3'
     );
   }
@@ -697,6 +697,95 @@ export function createWavFromPcm16(pcmSamples: Int16Array, sampleRate = 24000): 
   return new Uint8Array(buffer);
 }
 
+/**
+ * Guarantees that any returned audio byte buffer (whether already a RIFF WAVE container
+ * or raw 24kHz 16-bit signed little-endian PCM `audio/L16`) is wrapped in a valid 44-byte
+ * RIFF WAVE header so mobile `<audio>` elements on Android and iOS play it cleanly.
+ */
+export function ensureValidWavBytes(rawBytes: Uint8Array, sampleRate = 24000): Uint8Array {
+  if (
+    rawBytes.byteLength >= 44 &&
+    rawBytes[0] === 0x52 && // 'R'
+    rawBytes[1] === 0x49 && // 'I'
+    rawBytes[2] === 0x46 && // 'F'
+    rawBytes[3] === 0x46 && // 'F'
+    rawBytes[8] === 0x57 && // 'W'
+    rawBytes[9] === 0x41 && // 'A'
+    rawBytes[10] === 0x56 && // 'V'
+    rawBytes[11] === 0x45 // 'E'
+  ) {
+    return rawBytes;
+  }
+
+  const evenLength = rawBytes.byteLength - (rawBytes.byteLength % 2);
+  const sampleCount = evenLength / 2;
+  const pcm = new Int16Array(sampleCount);
+  const view = new DataView(rawBytes.buffer, rawBytes.byteOffset, evenLength);
+  for (let i = 0; i < sampleCount; i++) {
+    pcm[i] = view.getInt16(i * 2, true);
+  }
+  return createWavFromPcm16(pcm, sampleRate);
+}
+
+/**
+ * Fallback native OS speech synthesizer when a mobile device is completely offline.
+ * Speaks real intelligible words using the mobile browser's speech engine instead of a tone.
+ */
+export function speakWithNativeSpeechFallback(
+  text: string,
+  persona: VoicePersona,
+  accent: AccentProfile,
+  tempoMultiplier: number,
+  onEnd?: () => void
+): boolean {
+  if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
+    if (onEnd) setTimeout(onEnd, 1200);
+    return false;
+  }
+  try {
+    window.speechSynthesis.cancel();
+    const cleanText = text
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\|[^|]+\|/g, ' ')
+      .trim();
+    const utterance = new SpeechSynthesisUtterance(cleanText);
+    utterance.lang = accent.localeCode || 'en-GB';
+    utterance.rate = clampTempo(tempoMultiplier);
+    utterance.pitch = persona.gender === 'female' ? 1.08 : 0.88;
+
+    const voices = window.speechSynthesis.getVoices();
+    if (voices.length > 0) {
+      const langPrefix = (accent.localeCode || 'en').split('-')[0].toLowerCase();
+      const genderHint = persona.gender;
+      const matched =
+        voices.find(
+          (v) =>
+            v.lang.toLowerCase().includes((accent.localeCode || '').toLowerCase()) &&
+            (genderHint === 'male'
+              ? /male|daniel|david|james|arthur|george|oliver|guy|alex/i.test(v.name)
+              : /female|kate|serena|samantha|victoria|hazel|zira|google uk english female/i.test(
+                  v.name
+                ))
+        ) ||
+        voices.find((v) =>
+          v.lang.toLowerCase().includes((accent.localeCode || '').toLowerCase())
+        ) ||
+        voices.find((v) => v.lang.toLowerCase().startsWith(langPrefix));
+      if (matched) utterance.voice = matched;
+    }
+
+    if (onEnd) {
+      utterance.onend = () => onEnd();
+      utterance.onerror = () => onEnd();
+    }
+    window.speechSynthesis.speak(utterance);
+    return true;
+  } catch {
+    if (onEnd) setTimeout(onEnd, 1200);
+    return false;
+  }
+}
+
 export function synthesizeFormantPreviewWav(
   config: SynthesisConfig,
   customAccents: AccentProfile[] = []
@@ -796,7 +885,9 @@ export function generateIntegrationSnippets(
 
   const jsonFormatted = JSON.stringify(requestBody, null, 2);
 
-  const mobileDropInSdk = `// Drop-In Mobile Web App Reader SDK (Zero-Lag Lookahead Queue + iOS/Android MediaSession)
+  const mobileDropInSdk = `// Drop-In Mobile Web App Reader (Zero-Lag Lookahead + Automatic Raw PCM-to-WAV RIFF Wrapping)
+// NOTE: Never use a synthetic sine-wave fallback! This class guarantees real spoken voice audio
+// both via your /api/v1/voice/synthesize backend route AND in standalone mobile web apps.
 export class VoxChronosMobileReader {
   private audio = new Audio();
   private cache = new Map<number, string>();
@@ -809,7 +900,40 @@ export class VoxChronosMobileReader {
     this.audio.addEventListener('ended', () => this.playChunk(this.activeIdx + 1));
   }
 
-  // Call synchronously inside your Mobile "Read Aloud" button tap handler to unlock iOS Safari audio
+  // Ensures raw 24kHz 16-bit PCM (audio/L16) has a valid 44-byte RIFF WAVE header for mobile <audio>
+  private static ensureWavDataUrl(base64Audio: string, sampleRate = 24000): string {
+    const bin = atob(base64Audio);
+    if (bin.slice(0, 4) === 'RIFF' && bin.slice(8, 12) === 'WAVE') {
+      return \`data:audio/wav;base64,\${base64Audio}\`;
+    }
+    const dataLen = bin.length - (bin.length % 2);
+    const wav = new Uint8Array(44 + dataLen);
+    const view = new DataView(wav.buffer);
+    const writeStr = (off: number, s: string) => {
+      for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i));
+    };
+    writeStr(0, 'RIFF');
+    view.setUint32(4, 36 + dataLen, true);
+    writeStr(8, 'WAVE');
+    writeStr(12, 'fmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * 2, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
+    writeStr(36, 'data');
+    view.setUint32(40, dataLen, true);
+    for (let i = 0; i < dataLen; i++) wav[44 + i] = bin.charCodeAt(i);
+    let out = '';
+    for (let i = 0; i < wav.length; i += 8192) {
+      out += String.fromCharCode(...wav.subarray(i, i + 8192));
+    }
+    return \`data:audio/wav;base64,\${btoa(out)}\`;
+  }
+
+  // Call synchronously inside your Mobile "Listen & Pray Aloud" / "Read Aloud" tap handler
   async loadAndPlayDocument(rawDocumentText: string) {
     this.audio.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
     await this.audio.play().catch(() => {});
@@ -845,8 +969,8 @@ export class VoxChronosMobileReader {
         text: this.chunks[idx]
       })
     });
-    const { audioBase64, mimeType } = await res.json();
-    const url = \`data:\${mimeType};base64,\${audioBase64}\`;
+    const { audioBase64 } = await res.json();
+    const url = VoxChronosMobileReader.ensureWavDataUrl(audioBase64, 24000);
     this.cache.set(idx, url);
     return url;
   }
@@ -854,7 +978,6 @@ export class VoxChronosMobileReader {
   async playChunk(idx: number) {
     if (idx < 0 || idx >= this.chunks.length) return;
     this.activeIdx = idx;
-    // Prefetch next 2 segments in parallel for 0ms gapless transition on PDFs & Bibles
     if (idx + 1 < this.chunks.length) this.fetchChunkAudio(idx + 1);
     if (idx + 2 < this.chunks.length) this.fetchChunkAudio(idx + 2);
 

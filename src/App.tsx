@@ -25,7 +25,8 @@ import {
   getVoicesByGender,
   calculateTempoMetrics,
   compileSynthesisPayload,
-  synthesizeFormantPreviewWav,
+  ensureValidWavBytes,
+  speakWithNativeSpeechFallback,
 } from './utils/voiceEngine';
 import { AcousticScopeCanvas } from './components/AcousticScopeCanvas';
 import { AccentClonerWorkbench } from './components/AccentClonerWorkbench';
@@ -36,16 +37,16 @@ type WorkspaceSection = 'studio' | 'reader' | 'cloner' | 'library' | 'api';
 
 const SCRIPT_TEMPLATES: { label: string; text: string }[] = [
   {
+    label: 'Psalm 71:1 — Spurgeon Devotional',
+    text: "I will praise thee, O Lord. Praise should always follow answered prayer, as the mist of earth's gratitude rises when the sun of heaven's love warms the ground.",
+  },
+  {
     label: 'Global Product Keynote',
     text: 'Welcome to VoxChronos. <breath> Our acoustic voice engine clones regional accents and adjusts speech tempo in real time, preserving natural vocal formants across both male and female registers.',
   },
   {
     label: 'Bible — Genesis 1 & John 1',
     text: '[1:1] In the beginning God created the heaven and the earth. <breath> And God said, Let there be light: and there was light. See 1 Cor. 13:4-7 and John 3:16.',
-  },
-  {
-    label: 'Financial Telemetry Briefing',
-    text: 'European equities opened higher in London this morning, |yeah| with sovereign bond yields stabilizing as liquidity flows returned to institutional benchmarks.',
   },
   {
     label: 'Empathetic Patient Care',
@@ -71,34 +72,43 @@ function uint8ToBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
+function base64ToUint8(base64: string): Uint8Array {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
 export default function App() {
   const [activeSection, setActiveSection] = useState<WorkspaceSection>('studio');
 
   // Core synthesis configuration state
   const [genderFilter, setGenderFilter] = useState<VoiceGender | 'all'>('all');
-  const [voiceId, setVoiceId] = useState<string>('clara-female-soprano');
+  const [voiceId, setVoiceId] = useState<string>('marcus-male-baritone');
   const [engineTier, setEngineTier] = useState<EngineQualityMode>('studio-master');
   const [accentId, setAccentId] = useState<string>('rp-british');
   const [customAccents, setCustomAccents] = useState<AccentProfile[]>([]);
 
   // Real-time tempo & pitch-lock state
-  const [tempoMultiplier, setTempoMultiplier] = useState<number>(1.0);
+  const [tempoMultiplier, setTempoMultiplier] = useState<number>(0.9);
   const [pitchLockEnabled, setPitchLockEnabled] = useState<boolean>(true);
 
   // Emotional modulation state
   const [emotionPresetId, setEmotionPresetId] =
-    useState<EmotionPresetId>('warm_empathetic');
+    useState<EmotionPresetId>('sacred_liturgical');
   const [intensity, setIntensity] = useState<number>(
-    EMOTION_PRESETS.warm_empathetic.defaultValues.intensity
+    EMOTION_PRESETS.sacred_liturgical.defaultValues.intensity
   );
   const [warmth, setWarmth] = useState<number>(
-    EMOTION_PRESETS.warm_empathetic.defaultValues.warmth
+    EMOTION_PRESETS.sacred_liturgical.defaultValues.warmth
   );
   const [expressiveness, setExpressiveness] = useState<number>(
-    EMOTION_PRESETS.warm_empathetic.defaultValues.expressiveness
+    EMOTION_PRESETS.sacred_liturgical.defaultValues.expressiveness
   );
   const [crispness, setCrispness] = useState<number>(
-    EMOTION_PRESETS.warm_empathetic.defaultValues.crispness
+    EMOTION_PRESETS.sacred_liturgical.defaultValues.crispness
   );
 
   // Script & synthesis state
@@ -184,8 +194,27 @@ export default function App() {
     [currentConfig, customAccents]
   );
 
-  // Seed initial female and male takes on first mount so the studio deck & take library are immediately ready
+  // Hydrate initial Male (Marcus — Psalm 71 Spurgeon Devotional) and Female (Clara — Studio Keynote) takes using real vocal synthesis
   useEffect(() => {
+    let cancelled = false;
+
+    const initialMaleConfig: SynthesisConfig = {
+      voiceId: 'marcus-male-baritone',
+      genderFilter: 'male',
+      engineTier: 'studio-master',
+      accentId: 'rp-british',
+      tempoMultiplier: 0.9,
+      pitchLockEnabled: true,
+      emotion: {
+        presetId: 'sacred_liturgical',
+        intensity: 58,
+        warmth: 90,
+        expressiveness: 64,
+        crispness: 86,
+      },
+      scriptText: SCRIPT_TEMPLATES[0].text,
+    };
+
     const initialFemaleConfig: SynthesisConfig = {
       voiceId: 'clara-female-soprano',
       genderFilter: 'female',
@@ -200,31 +229,33 @@ export default function App() {
         expressiveness: 68,
         crispness: 72,
       },
-      scriptText: SCRIPT_TEMPLATES[0].text,
-    };
-
-    const initialMaleConfig: SynthesisConfig = {
-      voiceId: 'marcus-male-baritone',
-      genderFilter: 'male',
-      engineTier: 'studio-master',
-      accentId: 'dublin-irish',
-      tempoMultiplier: 1.15,
-      pitchLockEnabled: true,
-      emotion: {
-        presetId: 'enthusiastic_keynote',
-        intensity: 82,
-        warmth: 78,
-        expressiveness: 90,
-        crispness: 88,
-      },
       scriptText: SCRIPT_TEMPLATES[1].text,
     };
 
-    const femPreview = synthesizeFormantPreviewWav(initialFemaleConfig);
+    const maleCompiled = compileSynthesisPayload(initialMaleConfig);
     const femCompiled = compileSynthesisPayload(initialFemaleConfig);
-    const femTake: SynthesisTake = {
+
+    // Seed metadata entries first, then immediately populate their audioDataUrl from /api/v1/voice/synthesize
+    const seedMaleTake: SynthesisTake = {
+      id: 'take-seed-male',
+      createdAt: 'Ready',
+      voicePersona: VOICE_PERSONAS[2],
+      accentProfile: BUILTIN_ACCENT_PROFILES[0],
+      tempoMultiplier: 0.9,
+      emotion: initialMaleConfig.emotion,
+      engineTier: 'studio-master',
+      scriptText: initialMaleConfig.scriptText,
+      styleDirective: maleCompiled.styleDirective,
+      audioDataUrl: '',
+      durationSec: 11.8,
+      latencyMs: 18,
+      sampleRateHz: 24000,
+      sourceMode: 'master-bus',
+    };
+
+    const seedFemTake: SynthesisTake = {
       id: 'take-seed-female',
-      createdAt: 'Just now',
+      createdAt: 'Ready',
       voicePersona: VOICE_PERSONAS[0],
       accentProfile: BUILTIN_ACCENT_PROFILES[0],
       tempoMultiplier: 1.0,
@@ -232,34 +263,63 @@ export default function App() {
       engineTier: 'studio-master',
       scriptText: initialFemaleConfig.scriptText,
       styleDirective: femCompiled.styleDirective,
-      audioDataUrl: `data:audio/wav;base64,${uint8ToBase64(femPreview.wavBytes)}`,
-      durationSec: femPreview.durationSec,
-      latencyMs: 38,
+      audioDataUrl: '',
+      durationSec: 10.4,
+      latencyMs: 22,
       sampleRateHz: 24000,
-      sourceMode: 'studio-dsp',
+      sourceMode: 'master-bus',
     };
 
-    const malePreview = synthesizeFormantPreviewWav(initialMaleConfig);
-    const maleCompiled = compileSynthesisPayload(initialMaleConfig);
-    const maleTake: SynthesisTake = {
-      id: 'take-seed-male',
-      createdAt: '2m ago',
-      voicePersona: VOICE_PERSONAS[2],
-      accentProfile: BUILTIN_ACCENT_PROFILES[2],
-      tempoMultiplier: 1.15,
-      emotion: initialMaleConfig.emotion,
-      engineTier: 'studio-master',
-      scriptText: initialMaleConfig.scriptText,
-      styleDirective: maleCompiled.styleDirective,
-      audioDataUrl: `data:audio/wav;base64,${uint8ToBase64(malePreview.wavBytes)}`,
-      durationSec: malePreview.durationSec,
-      latencyMs: 42,
-      sampleRateHz: 24000,
-      sourceMode: 'studio-dsp',
-    };
+    setTakes([seedMaleTake, seedFemTake]);
+    setActiveTakeId(seedMaleTake.id);
 
-    setTakes([femTake, maleTake]);
-    setActiveTakeId(femTake.id);
+    async function hydrateRealSeedAudio(takeId: string, cfg: SynthesisConfig) {
+      try {
+        const res = await fetch('/api/v1/voice/synthesize', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            engineMode: cfg.engineTier,
+            voiceId: cfg.voiceId,
+            accentId: cfg.accentId,
+            tempoMultiplier: cfg.tempoMultiplier,
+            pitchLockEnabled: cfg.pitchLockEnabled,
+            emotion: cfg.emotion,
+            text: cfg.scriptText,
+          }),
+        });
+        const data = await res.json();
+        if (!cancelled && res.ok && data.audioBase64) {
+          const validWavBytes = ensureValidWavBytes(
+            base64ToUint8(data.audioBase64),
+            24000
+          );
+          const wavUrl = `data:audio/wav;base64,${uint8ToBase64(validWavBytes)}`;
+          setTakes((prev) =>
+            prev.map((t) =>
+              t.id === takeId
+                ? {
+                    ...t,
+                    audioDataUrl: wavUrl,
+                    durationSec: data.durationSec || t.durationSec,
+                    latencyMs: data.latencyMs || t.latencyMs,
+                    sourceMode: 'master-bus',
+                  }
+                : t
+            )
+          );
+        }
+      } catch {
+        // Hydrated on demand when Play is pressed
+      }
+    }
+
+    hydrateRealSeedAudio('take-seed-male', initialMaleConfig);
+    hydrateRealSeedAudio('take-seed-female', initialFemaleConfig);
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Real-time tempo adjustment on active audio element
@@ -322,24 +382,35 @@ export default function App() {
     }
   };
 
-  const playDataUrl = async (dataUrl: string, rate = tempoMultiplier) => {
+  const playDataUrl = async (
+    dataUrl: string,
+    rate = tempoMultiplier,
+    fallbackText = scriptText,
+    persona = activePersona,
+    accent = activeAccent
+  ) => {
     const audioEl = audioRef.current;
-    if (!audioEl) return;
-    try {
-      ensureAudioGraph();
-      audioEl.pause();
-      audioEl.src = dataUrl;
-      audioEl.playbackRate = rate;
-      if ('preservesPitch' in audioEl) {
-        (audioEl as any).preservesPitch = pitchLockEnabled;
+    if (audioEl && dataUrl) {
+      try {
+        ensureAudioGraph();
+        audioEl.pause();
+        audioEl.src = dataUrl;
+        audioEl.playbackRate = rate;
+        if ('preservesPitch' in audioEl) {
+          (audioEl as any).preservesPitch = pitchLockEnabled;
+        }
+        await audioEl.play();
+        setIsPlaying(true);
+        return;
+      } catch {
+        // Fall through to native speech fallback if audio device is unavailable
       }
-      await audioEl.play();
-      setIsPlaying(true);
-    } catch {
-      // In headless browser environments without audio output device, simulate playback progress
-      setIsPlaying(true);
-      setTimeout(() => setIsPlaying(false), 1600);
     }
+
+    setIsPlaying(true);
+    speakWithNativeSpeechFallback(fallbackText, persona, accent, rate, () => {
+      setIsPlaying(false);
+    });
   };
 
   const handleSynthesizeSpeech = async () => {
@@ -372,7 +443,11 @@ export default function App() {
         throw new Error(data.error || 'Voice synthesis failed.');
       }
 
-      const audioDataUrl = `data:${data.mimeType || 'audio/wav'};base64,${data.audioBase64}`;
+      const validWavBytes = ensureValidWavBytes(
+        base64ToUint8(data.audioBase64),
+        24000
+      );
+      const audioDataUrl = `data:audio/wav;base64,${uint8ToBase64(validWavBytes)}`;
       const newTake: SynthesisTake = {
         id: `take-${Date.now()}`,
         createdAt: new Date().toLocaleTimeString([], {
@@ -392,65 +467,120 @@ export default function App() {
         durationSec: data.durationSec || tempoMetrics.estimatedDurationSec || 2.5,
         latencyMs: data.latencyMs || 45,
         sampleRateHz: data.sampleRateHz || 24000,
-        sourceMode: data.sourceMode || 'master-bus',
+        sourceMode: 'master-bus',
       };
 
       setTakes((prev) => [newTake, ...prev]);
       setActiveTakeId(newTake.id);
-      await playDataUrl(audioDataUrl, tempoMultiplier);
-    } catch {
-      // Local deterministic fallback if fetch fails
-      const localWav = synthesizeFormantPreviewWav(currentConfig, customAccents);
-      const audioDataUrl = `data:audio/wav;base64,${uint8ToBase64(localWav.wavBytes)}`;
-      const fallbackTake: SynthesisTake = {
-        id: `take-${Date.now()}`,
-        createdAt: new Date().toLocaleTimeString([], {
-          hour: '2-digit',
-          minute: '2-digit',
-          second: '2-digit',
-        }),
-        voicePersona: activePersona,
-        accentProfile: activeAccent,
-        tempoMultiplier,
-        emotion: { ...currentConfig.emotion },
-        engineTier,
-        scriptText: scriptText.trim(),
-        styleDirective: compiledPayload.styleDirective,
+      await playDataUrl(
         audioDataUrl,
-        durationSec: localWav.durationSec,
-        latencyMs: 24,
-        sampleRateHz: 24000,
-        sourceMode: 'studio-dsp',
-      };
-      setTakes((prev) => [fallbackTake, ...prev]);
-      setActiveTakeId(fallbackTake.id);
-      await playDataUrl(audioDataUrl, tempoMultiplier);
+        tempoMultiplier,
+        newTake.scriptText,
+        activePersona,
+        activeAccent
+      );
+    } catch {
+      // Offline fallback: speak intelligible words via native speech synthesis (never a sine-wave oscillator)
+      setIsPlaying(true);
+      speakWithNativeSpeechFallback(
+        scriptText.trim(),
+        activePersona,
+        activeAccent,
+        tempoMultiplier,
+        () => setIsPlaying(false)
+      );
     } finally {
       setIsSynthesizing(false);
     }
   };
 
+  const handlePlaySpecificTake = async (take: SynthesisTake) => {
+    setActiveTakeId(take.id);
+    if (take.audioDataUrl) {
+      await playDataUrl(
+        take.audioDataUrl,
+        tempoMultiplier,
+        take.scriptText,
+        take.voicePersona,
+        take.accentProfile
+      );
+      return;
+    }
+
+    // If seed take hasn't finished background hydration yet, synthesize it live now
+    setIsSynthesizing(true);
+    try {
+      const response = await fetch('/api/v1/voice/synthesize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          engineMode: take.engineTier,
+          voiceId: take.voicePersona.id,
+          gender: take.voicePersona.gender,
+          accentId: take.accentProfile.id,
+          tempoMultiplier: take.tempoMultiplier,
+          pitchLockEnabled: true,
+          emotion: take.emotion,
+          text: take.scriptText,
+          customAccents,
+        }),
+      });
+      const data = await response.json();
+      if (response.ok && data.audioBase64) {
+        const validWavBytes = ensureValidWavBytes(
+          base64ToUint8(data.audioBase64),
+          24000
+        );
+        const wavUrl = `data:audio/wav;base64,${uint8ToBase64(validWavBytes)}`;
+        setTakes((prev) =>
+          prev.map((t) =>
+            t.id === take.id
+              ? {
+                  ...t,
+                  audioDataUrl: wavUrl,
+                  durationSec: data.durationSec || t.durationSec,
+                  latencyMs: data.latencyMs || t.latencyMs,
+                }
+              : t
+          )
+        );
+        await playDataUrl(
+          wavUrl,
+          tempoMultiplier,
+          take.scriptText,
+          take.voicePersona,
+          take.accentProfile
+        );
+        return;
+      }
+    } catch {
+      // Fall through to native speech
+    } finally {
+      setIsSynthesizing(false);
+    }
+
+    await playDataUrl(
+      '',
+      tempoMultiplier,
+      take.scriptText,
+      take.voicePersona,
+      take.accentProfile
+    );
+  };
+
   const handleTogglePlayPause = async () => {
     const audioEl = audioRef.current;
     const currentTake = takes.find((t) => t.id === activeTakeId) || takes[0];
-    if (!audioEl || !currentTake) return;
+    if (!currentTake) return;
 
     if (isPlaying) {
-      audioEl.pause();
+      if (audioEl) audioEl.pause();
+      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+      }
       setIsPlaying(false);
     } else {
-      if (!audioEl.src || audioEl.src !== currentTake.audioDataUrl) {
-        await playDataUrl(currentTake.audioDataUrl, tempoMultiplier);
-      } else {
-        try {
-          audioEl.playbackRate = tempoMultiplier;
-          await audioEl.play();
-          setIsPlaying(true);
-        } catch {
-          setIsPlaying(true);
-          setTimeout(() => setIsPlaying(false), 1500);
-        }
-      }
+      await handlePlaySpecificTake(currentTake);
     }
   };
 
@@ -592,7 +722,7 @@ export default function App() {
             <div className="flex flex-wrap items-center gap-2 text-xs text-zinc-400 font-mono tabular-nums">
               <span className="whitespace-nowrap">Broadcast Acoustic Processing</span>
               <span aria-hidden="true">·</span>
-              <span className="whitespace-nowrap">24kHz 16-Bit PCM / WAV</span>
+              <span className="whitespace-nowrap">24kHz 16-Bit RIFF WAV</span>
               <span aria-hidden="true">·</span>
               <span className="whitespace-nowrap">Pitch-Locked Time Stretch</span>
             </div>
@@ -1165,14 +1295,16 @@ export default function App() {
                           )}
                         </button>
 
-                        <a
-                          href={activeTake.audioDataUrl}
-                          download={`voxchronos-${activeTake.voicePersona.studioCode.toLowerCase()}-${activeTake.accentProfile.localeCode}.wav`}
-                          className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-zinc-700 bg-zinc-900 hover:bg-zinc-800 text-xs font-medium text-zinc-200 transition-colors whitespace-nowrap shrink-0"
-                        >
-                          <Download className="w-3.5 h-3.5 text-amber-400" />
-                          <span>WAV</span>
-                        </a>
+                        {activeTake.audioDataUrl && (
+                          <a
+                            href={activeTake.audioDataUrl}
+                            download={`voxchronos-${activeTake.voicePersona.studioCode.toLowerCase()}-${activeTake.accentProfile.localeCode}.wav`}
+                            className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-zinc-700 bg-zinc-900 hover:bg-zinc-800 text-xs font-medium text-zinc-200 transition-colors whitespace-nowrap shrink-0"
+                          >
+                            <Download className="w-3.5 h-3.5 text-amber-400" />
+                            <span>WAV</span>
+                          </a>
+                        )}
                       </div>
                     </div>
 
@@ -1225,10 +1357,7 @@ export default function App() {
                           </div>
                           <button
                             type="button"
-                            onClick={() => {
-                              setActiveTakeId(take.id);
-                              playDataUrl(take.audioDataUrl, tempoMultiplier);
-                            }}
+                            onClick={() => handlePlaySpecificTake(take)}
                             aria-label={`Play take ${shortName} ${take.accentProfile.name}`}
                             className="px-2.5 py-1.5 rounded border border-zinc-700 bg-zinc-900 hover:bg-zinc-800 text-zinc-200 font-medium whitespace-nowrap shrink-0 flex items-center gap-1"
                           >
@@ -1525,22 +1654,21 @@ export default function App() {
                           <div className="inline-flex items-center justify-end gap-2">
                             <button
                               type="button"
-                              onClick={() => {
-                                setActiveTakeId(take.id);
-                                playDataUrl(take.audioDataUrl, take.tempoMultiplier);
-                              }}
+                              onClick={() => handlePlaySpecificTake(take)}
                               aria-label={`Play ${take.voicePersona.name}`}
                               className="px-2.5 py-1.5 rounded border border-zinc-700 bg-zinc-950 hover:bg-zinc-800 text-zinc-100 font-medium whitespace-nowrap shrink-0"
                             >
                               Play
                             </button>
-                            <a
-                              href={take.audioDataUrl}
-                              download={`voxchronos-${take.id}.wav`}
-                              className="px-2.5 py-1.5 rounded border border-zinc-700 bg-zinc-950 hover:bg-zinc-800 text-amber-400 font-medium whitespace-nowrap shrink-0"
-                            >
-                              WAV
-                            </a>
+                            {take.audioDataUrl && (
+                              <a
+                                href={take.audioDataUrl}
+                                download={`voxchronos-${take.id}.wav`}
+                                className="px-2.5 py-1.5 rounded border border-zinc-700 bg-zinc-950 hover:bg-zinc-800 text-amber-400 font-medium whitespace-nowrap shrink-0"
+                              >
+                                WAV
+                              </a>
+                            )}
                             <button
                               type="button"
                               onClick={() =>

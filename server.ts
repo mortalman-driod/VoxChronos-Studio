@@ -9,13 +9,14 @@ import {
   BUILTIN_ACCENT_PROFILES,
   EMOTION_PRESETS,
   compileSynthesisPayload,
-  synthesizeFormantPreviewWav,
+  ensureValidWavBytes,
   chunkLongDocumentForStreaming,
   normalizeDocumentText,
   SynthesisConfig,
   AccentProfile,
   DocumentNormalizerOptions,
   EngineQualityMode,
+  CompiledSynthesisPayload,
 } from './src/utils/voiceEngine.ts';
 
 dotenv.config();
@@ -23,13 +24,13 @@ dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// High-speed LRU Audio Cache for zero-latency repeat & lookahead segment playback
+// High-speed LRU Audio Cache for zero-latency repeat & lookahead segment playback (stores ONLY verified real vocal WAVs)
 const synthesisLruCache = new Map<
   string,
   {
     audioBase64: string;
     durationSec: number;
-    sourceMode: 'master-bus' | 'studio-dsp';
+    sourceMode: 'master-bus';
   }
 >();
 const MAX_CACHE_ENTRIES = 120;
@@ -39,7 +40,7 @@ function setCacheEntry(
   val: {
     audioBase64: string;
     durationSec: number;
-    sourceMode: 'master-bus' | 'studio-dsp';
+    sourceMode: 'master-bus';
   }
 ) {
   if (synthesisLruCache.size >= MAX_CACHE_ENTRIES) {
@@ -50,7 +51,10 @@ function setCacheEntry(
 }
 
 function getGenAIClient(): GoogleGenAI | null {
-  const apiKey = process.env.GEMINI_API_KEY;
+  const apiKey =
+    process.env.GEMINI_API_KEY ||
+    process.env.VITE_GEMINI_API_KEY ||
+    process.env.GOOGLE_API_KEY;
   if (!apiKey || apiKey === 'MY_GEMINI_API_KEY' || apiKey.trim() === '') {
     return null;
   }
@@ -78,6 +82,132 @@ function mapEngineModeToModelId(mode: EngineQualityMode): string {
   return mode === 'low-latency-stream'
     ? 'gemini-3.8-flash-lite-tts'
     : 'gemini-3.8-flash-tts';
+}
+
+/**
+ * Multi-stage resilient vocal synthesis cascade:
+ * 1. Primary: gemini-3.8-flash-tts / gemini-3.8-flash-lite-tts with speechMetadata style directive
+ * 2. Secondary: gemini-2.5-flash-preview-tts (universal key compatibility, auto-wraps raw audio/L16 PCM into 44-byte RIFF WAVE)
+ * 3. Tertiary: gemini-3.8-flash-tts plain text without speechMetadata
+ * Never falls back to synthetic sine-wave oscillators.
+ */
+async function synthesizeWithResilientTtsCascade(
+  ai: GoogleGenAI,
+  compiled: CompiledSynthesisPayload
+): Promise<{ wavBase64: string; durationSec: number } | null> {
+  const primaryModel = mapEngineModeToModelId(compiled.engineMode);
+  const cleanSpokenText = compiled.decoratedText
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\|[^|]+\|/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const attempts: Array<() => Promise<string | undefined>> = [
+    // Attempt 1: Primary 3.8 TTS with speechMetadata & vocal burst support
+    async () => {
+      const response = await ai.models.generateContent({
+        model: primaryModel,
+        contents: [
+          {
+            role: 'user',
+            parts: [
+              {
+                text: compiled.decoratedText,
+                // @ts-ignore - speechMetadata is supported by 3.8 TTS engine
+                speechMetadata: {
+                  style: compiled.styleDirective,
+                },
+              },
+            ],
+          },
+        ],
+        config: {
+          responseModalities: ['AUDIO'],
+          speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: {
+                voiceName: compiled.internalVoiceCode,
+              },
+            },
+          },
+        },
+      });
+      return response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+    },
+    // Attempt 2: Universal 2.5 Flash Preview TTS (wraps raw L16 PCM into RIFF WAVE automatically)
+    async () => {
+      const response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash-preview-tts',
+        contents: [
+          {
+            role: 'user',
+            parts: [
+              {
+                text: `${compiled.styleDirective}\n\nRead the following passage aloud with natural human cadence:\n${cleanSpokenText}`,
+              },
+            ],
+          },
+        ],
+        config: {
+          responseModalities: ['AUDIO'],
+          speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: {
+                voiceName: compiled.internalVoiceCode,
+              },
+            },
+          },
+        },
+      });
+      return response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+    },
+    // Attempt 3: Plain text on Primary 3.8 TTS without speechMetadata
+    async () => {
+      const response = await ai.models.generateContent({
+        model: 'gemini-3.8-flash-tts',
+        contents: [
+          {
+            role: 'user',
+            parts: [{ text: cleanSpokenText }],
+          },
+        ],
+        config: {
+          responseModalities: ['AUDIO'],
+          speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: {
+                voiceName: compiled.internalVoiceCode,
+              },
+            },
+          },
+        },
+      });
+      return response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+    },
+  ];
+
+  for (const runAttempt of attempts) {
+    try {
+      const rawBase64 = await runAttempt();
+      if (rawBase64 && rawBase64.length > 100) {
+        const rawBuf = Buffer.from(rawBase64, 'base64');
+        const validWavBytes = ensureValidWavBytes(new Uint8Array(rawBuf), 24000);
+        const wavBase64 = Buffer.from(validWavBytes).toString('base64');
+        const durationSec = Math.max(
+          0.6,
+          Math.round(((validWavBytes.byteLength - 44) / 48000) * 10) / 10
+        );
+        return { wavBase64, durationSec };
+      }
+    } catch (err) {
+      console.warn(
+        'TTS cascade stage warning:',
+        err instanceof Error ? err.message : err
+      );
+    }
+  }
+
+  return null;
 }
 
 /**
@@ -111,6 +241,69 @@ function extractTextFromPdfBufferFallback(buffer: Buffer): string {
     .replace(/[^\x20-\x7E\r\n]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+async function prewarmStudioVocalCache() {
+  const ai = getGenAIClient();
+  if (!ai) return;
+
+  const warmConfigs: SynthesisConfig[] = [
+    {
+      voiceId: 'marcus-male-baritone',
+      genderFilter: 'male',
+      engineTier: 'studio-master',
+      accentId: 'rp-british',
+      tempoMultiplier: 0.9,
+      pitchLockEnabled: true,
+      emotion: {
+        presetId: 'sacred_liturgical',
+        intensity: 58,
+        warmth: 90,
+        expressiveness: 64,
+        crispness: 86,
+      },
+      scriptText: normalizeDocumentText(
+        "I will praise thee, O Lord. Praise should always follow answered prayer, as the mist of earth's gratitude rises when the sun of heaven's love warms the ground."
+      ),
+    },
+    {
+      voiceId: 'clara-female-soprano',
+      genderFilter: 'female',
+      engineTier: 'studio-master',
+      accentId: 'rp-british',
+      tempoMultiplier: 1.0,
+      pitchLockEnabled: true,
+      emotion: {
+        presetId: 'warm_empathetic',
+        intensity: 60,
+        warmth: 92,
+        expressiveness: 68,
+        crispness: 72,
+      },
+      scriptText: normalizeDocumentText(
+        'Welcome to VoxChronos. <breath> Our acoustic voice engine clones regional accents and adjusts speech tempo in real time, preserving natural vocal formants across both male and female registers.'
+      ),
+    },
+  ];
+
+  for (const cfg of warmConfigs) {
+    try {
+      const compiled = compileSynthesisPayload(cfg, []);
+      const cacheKey = `${compiled.engineMode}|${compiled.voiceCode}|${cfg.accentId}|${compiled.emotionSummary}|${compiled.decoratedText}`;
+      if (!synthesisLruCache.has(cacheKey)) {
+        const res = await synthesizeWithResilientTtsCascade(ai, compiled);
+        if (res) {
+          setCacheEntry(cacheKey, {
+            audioBase64: res.wavBase64,
+            durationSec: res.durationSec,
+            sourceMode: 'master-bus',
+          });
+        }
+      }
+    } catch {
+      // Ignore background pre-warm errors
+    }
+  }
 }
 
 async function startServer() {
@@ -148,6 +341,7 @@ async function startServer() {
         lookaheadPrefetchCache: true,
         pdfAndBibleNormalization: true,
         corsEnabledForMobileWebApps: true,
+        riffWavHeaderNormalization: true,
       },
     });
   });
@@ -294,7 +488,9 @@ async function startServer() {
         : [];
       const compiled = compileSynthesisPayload(config, customAccents);
 
-      const cacheKey = `${compiled.engineMode}|${compiled.voiceCode}|${config.accentId}|${compiled.tempoMultiplier}|${config.emotion.presetId}|${config.emotion.intensity}|${config.emotion.warmth}|${compiled.decoratedText}`;
+      // Note: tempoMultiplier is applied in real time via pitch-locked playbackRate on the client,
+      // so caching by voice + accent + emotion + text allows instant tempo scrubbing.
+      const cacheKey = `${compiled.engineMode}|${compiled.voiceCode}|${config.accentId}|${compiled.emotionSummary}|${compiled.decoratedText}`;
       const cached = synthesisLruCache.get(cacheKey);
       if (cached) {
         res.json({
@@ -311,93 +507,34 @@ async function startServer() {
       }
 
       const ai = getGenAIClient();
-
       if (ai) {
-        try {
-          const response = await ai.models.generateContent({
-            model: mapEngineModeToModelId(compiled.engineMode),
-            contents: [
-              {
-                role: 'user',
-                parts: [
-                  {
-                    text: compiled.decoratedText,
-                    // @ts-ignore - speechMetadata is supported by TTS engine
-                    speechMetadata: {
-                      style: compiled.styleDirective,
-                    },
-                  },
-                ],
-              },
-            ],
-            config: {
-              responseModalities: ['AUDIO'],
-              speechConfig: {
-                voiceConfig: {
-                  prebuiltVoiceConfig: {
-                    voiceName: compiled.internalVoiceCode,
-                  },
-                },
-              },
-            },
+        const result = await synthesizeWithResilientTtsCascade(ai, compiled);
+        if (result) {
+          const latencyMs = Date.now() - startTime;
+          setCacheEntry(cacheKey, {
+            audioBase64: result.wavBase64,
+            durationSec: result.durationSec,
+            sourceMode: 'master-bus',
           });
 
-          const base64Audio =
-            response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-
-          if (base64Audio) {
-            const wavBuffer = Buffer.from(base64Audio, 'base64');
-            const durationSec = Math.max(
-              0.5,
-              Math.round(((wavBuffer.byteLength - 44) / 48000) * 10) / 10
-            );
-            const latencyMs = Date.now() - startTime;
-
-            setCacheEntry(cacheKey, {
-              audioBase64: base64Audio,
-              durationSec,
-              sourceMode: 'master-bus',
-            });
-
-            res.json({
-              audioBase64: base64Audio,
-              mimeType: 'audio/wav',
-              sampleRateHz: 24000,
-              durationSec,
-              latencyMs,
-              cacheHit: false,
-              sourceMode: 'master-bus',
-              compiled,
-            });
-            return;
-          }
-        } catch (ttsErr) {
-          console.warn(
-            'Master bus fallback to Studio DSP formant synthesizer:',
-            ttsErr instanceof Error ? ttsErr.message : ttsErr
-          );
+          res.json({
+            audioBase64: result.wavBase64,
+            mimeType: 'audio/wav',
+            sampleRateHz: 24000,
+            durationSec: result.durationSec,
+            latencyMs,
+            cacheHit: false,
+            sourceMode: 'master-bus',
+            compiled,
+          });
+          return;
         }
       }
 
-      // Deterministic Formant-Shaped Studio Reference Synthesis
-      const fallback = synthesizeFormantPreviewWav(config, customAccents);
-      const base64Wav = Buffer.from(fallback.wavBytes).toString('base64');
-      const latencyMs = Math.max(12, Date.now() - startTime);
-
-      setCacheEntry(cacheKey, {
-        audioBase64: base64Wav,
-        durationSec: fallback.durationSec,
-        sourceMode: 'studio-dsp',
-      });
-
-      res.json({
-        audioBase64: base64Wav,
-        mimeType: 'audio/wav',
-        sampleRateHz: fallback.sampleRate,
-        durationSec: fallback.durationSec,
-        latencyMs,
-        cacheHit: false,
-        sourceMode: 'studio-dsp',
+      res.status(503).json({
+        error:
+          'Voice synthesis engine temporarily unreachable. Please check your connection or API credentials.',
+        fallbackToNativeSpeech: true,
         compiled,
       });
     } catch (error) {
@@ -484,7 +621,13 @@ async function startServer() {
               chunk.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
             if (data) {
               wroteChunk = true;
-              res.write(Buffer.from(data, 'base64'));
+              const buf = Buffer.from(data, 'base64');
+              // Strip 44-byte WAV header if present in first chunk so stream is pure PCM16
+              const payload =
+                buf.byteLength > 44 && buf.slice(0, 4).toString('ascii') === 'RIFF'
+                  ? buf.subarray(44)
+                  : buf;
+              res.write(payload);
             }
           }
           if (wroteChunk) {
@@ -492,14 +635,19 @@ async function startServer() {
             return;
           }
         } catch (streamErr) {
-          console.warn('Streaming audio fallback:', streamErr);
+          console.warn('Streaming audio fallback to unary cascade:', streamErr);
+        }
+
+        const fallbackResult = await synthesizeWithResilientTtsCascade(ai, compiled);
+        if (fallbackResult) {
+          const wavBuf = Buffer.from(fallbackResult.wavBase64, 'base64');
+          res.write(wavBuf.subarray(44));
+          res.end();
+          return;
         }
       }
 
-      const fallback = synthesizeFormantPreviewWav(config, customAccents);
-      const rawPcm = fallback.wavBytes.slice(44);
-      res.write(Buffer.from(rawPcm));
-      res.end();
+      res.status(503).end();
     } catch (error) {
       if (!res.headersSent) {
         res.status(500).json({
@@ -698,6 +846,7 @@ Return a structured JSON object defining the cloned accent profile for acoustic 
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`VoxChronos Voice Engine Server running on http://0.0.0.0:${PORT}`);
+    prewarmStudioVocalCache();
   });
 }
 
