@@ -986,6 +986,10 @@ async function startServer() {
 
   app.use(express.json({ limit: '50mb' }));
 
+  // Instant health check for Render / cloud container probes
+  app.get('/health', (_req, res) => res.status(200).json({ status: 'healthy', uptime: process.uptime() }));
+  app.get('/healthz', (_req, res) => res.status(200).send('OK'));
+
   // GET /api/v1/voice/catalog — Discover Male/Female voices, Accents & Emotion presets
   app.get('/api/v1/voice/catalog', (_req, res) => {
     res.json({
