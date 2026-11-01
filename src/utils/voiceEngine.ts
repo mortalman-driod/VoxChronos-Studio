@@ -196,6 +196,20 @@ export const VOICE_PERSONAS: VoicePersona[] = [
     baseWarmth: 68,
     baseCrispness: 92,
   },
+  {
+    id: 'announcer-studio-master',
+    name: 'Announcer — Golden Age Studio Master',
+    studioCode: 'VC-ANNOUNCER-M4',
+    internalVoiceCode: 'Fenrir',
+    gender: 'male',
+    registerLabel: 'Dramatic Orator Baritone',
+    fundamentalFreqHz: [110, 160],
+    formantSignature: 'F1 450Hz · F2 1520Hz · F3 2600Hz',
+    timbreSummary: 'Resonant, authoritative, broadcast-grade orator timbre with commanding sacred presence, trained with custom Colab acoustic prompt embeddings',
+    recommendedRole: 'Sacred Scripture Narration, Epic Devotionals, Orator & Audiobooks',
+    baseWarmth: 86,
+    baseCrispness: 91,
+  },
 ];
 
 export const BUILTIN_ACCENT_PROFILES: AccentProfile[] = [

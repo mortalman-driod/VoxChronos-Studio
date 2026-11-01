@@ -6,3 +6,10 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Large model binaries (>100MB GitHub limit - store in Hugging Face Hub)
+*.safetensors
+*.bin
+*.pt
+*.pth
+*.onnx

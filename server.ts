@@ -153,7 +153,8 @@ function resolveStudioNeuralVoice(
   const loc = (localeCode || 'en-GB').toLowerCase();
 
   let basePitchHz = 0;
-  if (voiceCode === 'VC-JULIAN-M2') basePitchHz = -8;
+  if (voiceCode === 'VC-ANNOUNCER-M4') basePitchHz = -6;
+  else if (voiceCode === 'VC-JULIAN-M2') basePitchHz = -8;
   else if (voiceCode === 'VC-MARCUS-M1') basePitchHz = -4;
   else if (voiceCode === 'VC-LIAM-M3') basePitchHz = 2;
   else if (voiceCode === 'VC-ELENA-F2') basePitchHz = -5;
@@ -532,7 +533,7 @@ async function synthesizeWithAcousticBroadcastBus(
   const combinedMp3 = Buffer.concat(mp3Parts);
 
   const ff = spawnSync(
-    '/usr/bin/ffmpeg',
+    process.env.FFMPEG_PATH || (process.platform === 'win32' ? 'ffmpeg' : '/usr/bin/ffmpeg'),
     [
       '-hide_banner',
       '-loglevel',
@@ -614,7 +615,7 @@ async function synthesizeSingleSegmentWithCascade(
       ].join(',');
 
       const ff = spawnSync(
-        '/usr/bin/ffmpeg',
+        process.env.FFMPEG_PATH || (process.platform === 'win32' ? 'ffmpeg' : '/usr/bin/ffmpeg'),
         [
           '-hide_banner',
           '-loglevel',
