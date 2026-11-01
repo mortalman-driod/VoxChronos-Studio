@@ -83,6 +83,7 @@ export interface CompiledSynthesisPayload {
   accentName: string;
   localeCode: string;
   emotionSummary: string;
+  emotion: EmotionalModulation;
 }
 
 export type PublicCompiledSynthesisPayload = Omit<
@@ -749,6 +750,7 @@ export function compileSynthesisPayload(
     accentName: accent.name,
     localeCode: accent.localeCode,
     emotionSummary,
+    emotion: config.emotion,
   };
 }
 

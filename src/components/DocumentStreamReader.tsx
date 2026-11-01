@@ -356,7 +356,7 @@ export const DocumentStreamReader: React.FC<DocumentStreamReaderProps> = ({
       }
     }
 
-    const blob = new Blob([wavBytes], { type: 'audio/wav' });
+    const blob = new Blob([wavBytes as any], { type: 'audio/wav' });
     const objUrl = URL.createObjectURL(blob);
     blobUrlCacheRef.current.set(key, { url: objUrl, chunkIdx });
     setRamBlobCount(blobUrlCacheRef.current.size);
@@ -631,7 +631,7 @@ export const DocumentStreamReader: React.FC<DocumentStreamReaderProps> = ({
         throw new Error(data.error || 'Failed to stitch chapter WAV.');
       }
       const validWav = ensureValidWavBytes(base64ToUint8(data.audioBase64), 24000);
-      const blob = new Blob([validWav], { type: 'audio/wav' });
+      const blob = new Blob([validWav as any], { type: 'audio/wav' });
       const downloadUrl = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = downloadUrl;

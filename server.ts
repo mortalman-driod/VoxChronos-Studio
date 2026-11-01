@@ -967,7 +967,7 @@ Cross-reference reading from Ps. 71:5–8 and Phil. 4:6–7: For thou art my hop
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
   // Enable CORS so external mobile web apps & WebViews can integrate directly
   app.use((req, res, next) => {
@@ -1516,18 +1516,22 @@ Return a structured JSON object defining the cloned accent profile for acoustic 
     }
   });
 
-  if (process.env.NODE_ENV !== 'production') {
+  const distPath = path.join(__dirname, 'dist');
+  const distIndex = path.join(distPath, 'index.html');
+
+  if (process.env.NODE_ENV === 'production' && fs.existsSync(distIndex)) {
+    console.log(`[VoxChronos] Serving production client build from ${distPath}`);
+    app.use(express.static(distPath));
+    app.get('*', (_req, res) => {
+      res.sendFile(distIndex);
+    });
+  } else {
+    console.log('[VoxChronos] Mounting dynamic Vite middleware for live client delivery');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
     });
     app.use(vite.middlewares);
-  } else {
-    const distPath = path.join(__dirname, 'dist');
-    app.use(express.static(distPath));
-    app.get('*', (_req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
-    });
   }
 
   app.listen(PORT, '0.0.0.0', () => {
